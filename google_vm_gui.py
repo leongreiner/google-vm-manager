@@ -6,12 +6,71 @@ from PyQt5.QtWidgets import (
     QDialogButtonBox, QTabWidget
 )
 from PyQt5.QtGui import QFont, QIcon, QColor, QPalette, QScreen
-from PyQt5.QtCore import QThread, pyqtSignal, Qt
+from PyQt5.QtCore import QThread, pyqtSignal, Qt, QTimer
 
 # Use relative paths for distribution
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 SCRIPT_PATH = os.path.join(SCRIPT_DIR, "google_vm_manager.sh")
 SETTINGS_FILE = os.path.join(SCRIPT_DIR, "vm_settings.json")
+
+class VMStatusWorker(QThread):
+    status_ready = pyqtSignal(str, str)  # status, color
+
+    def __init__(self, vm_config):
+        super().__init__()
+        self.vm_config = vm_config
+
+    def run(self):
+        try:
+            # Get both status and detailed info to better determine actual state
+            cmd = f"gcloud compute instances describe {self.vm_config['name']} --zone={self.vm_config['zone']} --project={self.vm_config['project_id']} --format='value(status,scheduling.preemptible)'"
+            result = subprocess.run(
+                ["bash", "-c", cmd],
+                capture_output=True,
+                text=True,
+                timeout=10
+            )
+            
+            if result.returncode == 0:
+                output_lines = result.stdout.strip().split('\n')
+                status = output_lines[0] if output_lines else 'UNKNOWN'
+                
+                # Handle Google Cloud's inconsistent status reporting
+                # Sometimes "TERMINATED" is used for stopped preemptible instances
+                if status == 'TERMINATED':
+                    # Check if this is actually a stopped instance vs truly terminated
+                    list_cmd = f"gcloud compute instances list --filter='name={self.vm_config['name']}' --zones={self.vm_config['zone']} --project={self.vm_config['project_id']} --format='value(status)'"
+                    list_result = subprocess.run(
+                        ["bash", "-c", list_cmd],
+                        capture_output=True,
+                        text=True,
+                        timeout=5
+                    )
+                    
+                    if list_result.returncode == 0 and list_result.stdout.strip():
+                        # If the instance appears in the list, it's likely STOPPED, not truly TERMINATED
+                        actual_status = list_result.stdout.strip()
+                        if actual_status in ['TERMINATED', 'STOPPING']:
+                            status = 'STOPPED'  # Treat as stopped for practical purposes
+                        else:
+                            status = actual_status
+                
+                # Map status to colors
+                color_map = {
+                    'RUNNING': '#4CAF50',      # Green
+                    'STOPPED': '#f44336',      # Red
+                    'STOPPING': '#ff9800',     # Orange
+                    'STARTING': '#2196F3',     # Blue
+                    'PROVISIONING': '#9C27B0', # Purple
+                    'REPAIRING': '#ff5722',    # Deep Orange
+                    'TERMINATED': '#607D8B'    # Blue Grey (truly terminated)
+                }
+                color = color_map.get(status, '#757575')  # Default grey
+                self.status_ready.emit(status, color)
+            else:
+                self.status_ready.emit('UNKNOWN', '#757575')
+        except Exception:
+            self.status_ready.emit('ERROR', '#f44336')
 
 class GoogleVMWorker(QThread):
     output = pyqtSignal(str)
@@ -227,7 +286,9 @@ class GoogleVMControlApp(QWidget):
     def __init__(self):
         super().__init__()
         self.vm_configs = self.load_vm_configs()
+        self.status_worker = None
         self.setup_ui()
+        self.setup_status_timer()
 
     def load_vm_configs(self):
         try:
@@ -244,7 +305,7 @@ class GoogleVMControlApp(QWidget):
     def setup_ui(self):
         self.setWindowTitle("Google VM Control")
         self.setWindowIcon(QIcon.fromTheme("network-server"))
-        self.setFixedSize(500, 450)
+        self.setFixedSize(500, 500)
 
         palette = QPalette()
         palette.setColor(QPalette.Window, QColor(53, 53, 53))
@@ -260,10 +321,11 @@ class GoogleVMControlApp(QWidget):
         title.setAlignment(Qt.AlignCenter)
         main_layout.addWidget(title)
 
-        # VM Selection
+        # VM Selection with Status
         vm_layout = QHBoxLayout()
         vm_layout.addWidget(QLabel("Select VM:"))
         self.vm_combo = QComboBox()
+        self.vm_combo.currentTextChanged.connect(self.on_vm_selection_changed)
         self.refresh_vm_combo()
         vm_layout.addWidget(self.vm_combo)
         
@@ -271,6 +333,22 @@ class GoogleVMControlApp(QWidget):
         self.settings_btn.clicked.connect(self.open_settings)
         vm_layout.addWidget(self.settings_btn)
         main_layout.addLayout(vm_layout)
+
+        # VM Status Display
+        status_layout = QHBoxLayout()
+        status_layout.addWidget(QLabel("Status:"))
+        self.vm_status_label = QLabel("Select a VM")
+        self.vm_status_label.setFont(QFont("Arial", 11, QFont.Bold))
+        self.vm_status_label.setStyleSheet("padding: 5px; border-radius: 3px; background-color: #757575; color: white;")
+        status_layout.addWidget(self.vm_status_label)
+        status_layout.addStretch()
+        
+        self.refresh_status_btn = QPushButton("🔄")
+        self.refresh_status_btn.setFixedSize(30, 30)
+        self.refresh_status_btn.setToolTip("Refresh Status")
+        self.refresh_status_btn.clicked.connect(self.refresh_vm_status)
+        status_layout.addWidget(self.refresh_status_btn)
+        main_layout.addLayout(status_layout)
 
         self.status_label = QLabel("Ready.")
         self.status_label.setFont(QFont("Arial", 12))
@@ -310,6 +388,43 @@ class GoogleVMControlApp(QWidget):
         self.start_vnc_btn.clicked.connect(lambda: self.handle_google_vm_action("start", False))
         self.start_no_vnc_btn.clicked.connect(lambda: self.handle_google_vm_action("start", True))
         self.stop_btn.clicked.connect(lambda: self.handle_google_vm_action("stop", False))
+
+    def setup_status_timer(self):
+        """Setup timer for automatic status refresh"""
+        self.status_timer = QTimer()
+        self.status_timer.timeout.connect(self.refresh_vm_status)
+        self.status_timer.start(30000)  # Refresh every 30 seconds
+
+    def on_vm_selection_changed(self):
+        """Called when VM selection changes"""
+        self.refresh_vm_status()
+
+    def refresh_vm_status(self):
+        """Refresh the status of the currently selected VM"""
+        current_vm = self.vm_combo.currentData()
+        if not current_vm:
+            self.vm_status_label.setText("No VM Selected")
+            self.vm_status_label.setStyleSheet("padding: 5px; border-radius: 3px; background-color: #757575; color: white;")
+            return
+
+        # Don't refresh if an operation is in progress
+        if hasattr(self, 'worker') and self.worker and self.worker.isRunning():
+            return
+
+        if self.status_worker and self.status_worker.isRunning():
+            return
+
+        self.vm_status_label.setText("Checking...")
+        self.vm_status_label.setStyleSheet("padding: 5px; border-radius: 3px; background-color: #757575; color: white;")
+
+        self.status_worker = VMStatusWorker(current_vm)
+        self.status_worker.status_ready.connect(self.update_vm_status)
+        self.status_worker.start()
+
+    def update_vm_status(self, status, color):
+        """Update the VM status display"""
+        self.vm_status_label.setText(status)
+        self.vm_status_label.setStyleSheet(f"padding: 5px; border-radius: 3px; background-color: {color}; color: white;")
 
     def refresh_vm_combo(self):
         self.vm_combo.clear()
@@ -359,6 +474,8 @@ class GoogleVMControlApp(QWidget):
         if exit_code == 0:
             QMessageBox.information(self, "Done", "Operation completed successfully.")
             self.status_label.setText("Ready.")
+            # Refresh status after successful operation
+            QTimer.singleShot(2000, self.refresh_vm_status)  # Wait 2 seconds before refreshing
         else:
             QMessageBox.critical(
                 self, "Error",

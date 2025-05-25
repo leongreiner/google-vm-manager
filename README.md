@@ -70,9 +70,9 @@ cd google-vm-manager
 chmod +x google_vm_manager.sh
 chmod +x google_vm_gui.py
 
-# Create desktop entry (optional - adds to applications menu)
+# Create system-wide desktop entry (optional - adds to applications menu for all users)
 chmod +x create_desktop_entry.sh
-./create_desktop_entry.sh
+sudo ./create_desktop_entry.sh
 ```
 
 ## VM Setup Requirements
@@ -173,6 +173,19 @@ When starting a VM with VNC:
 - Sets up the VNC server on the remote VM
 - Creates a Remmina configuration file
 - Launches Remmina with the connection
+
+## File Structure
+
+```
+google-vm-manager/
+├── google_vm_gui.py              # Main GUI application
+├── google_vm_manager.sh          # Shell script for VM operations
+├── create_desktop_entry.sh       # Script to create desktop entry
+├── google-vm-manager.png         # Application icon (required for desktop entry)
+├── vm_settings.json              # VM configurations (created automatically)
+├── README.md                     # This file
+└── *.remmina                     # Remmina connection files (created automatically)
+```
 
 ## Configuration Files
 

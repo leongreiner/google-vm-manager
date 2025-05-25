@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="2 20 80 60" width="100" height="100">
+  <!-- Cloud -->
+  <path d="M70 50
+           A10 10 0 0 0 50 40
+           A15 15 0 1 0 22 47
+           H20
+           A10 10 0 0 0 20 67
+           H70
+           A10 10 0 0 0 70 50
+           Z"
+        fill="#4285F4"/>
+
+  <!-- Compute (microchip) symbol -->
+  <rect x="35" y="45" width="16" height="16" rx="2" fill="#FFFFFF" stroke="#000" stroke-width="1"/>
+  <!-- VM label -->
+  <text x="43" y="55" text-anchor="middle" font-family="Montserrat" font-size="6" fill="#000" font-weight="bold">VM</text>
+  <!-- Left pins -->
+  <rect x="33" y="48" width="2" height="4" fill="#000"/>
+  <rect x="33" y="54" width="2" height="4" fill="#000"/>
+  <!-- Right pins -->
+  <rect x="51" y="48" width="2" height="4" fill="#000"/>
+  <rect x="51" y="54" width="2" height="4" fill="#000"/>
+  <!-- Top pins -->
+  <rect x="38" y="43" width="4" height="2" fill="#000"/>
+  <rect x="44" y="43" width="4" height="2" fill="#000"/>
+  <!-- Bottom pins -->
+  <rect x="38" y="61" width="4" height="2" fill="#000"/>
+  <rect x="44" y="61" width="4" height="2" fill="#000"/>
+</svg>
