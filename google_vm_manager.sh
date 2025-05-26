@@ -86,7 +86,7 @@ echo "🖥️ Setting up VNC server ($VNC_RESOLUTION)..."
 ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
     leon_greiner12345@$VM_IP "vncserver -kill $VNC_DISPLAY" >/dev/null 2>&1
 
-sleep 2
+sleep 5
 
 # Start VNC server and capture only essential output
 VNC_OUTPUT=$(ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
