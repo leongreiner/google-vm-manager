@@ -23,6 +23,9 @@ if [[ -z "$VNC_RESOLUTION" ]]; then
   VNC_RESOLUTION="1920x1080"
 fi
 
+# Get current user
+CURRENT_USER=$(whoami)
+
 VNC_DISPLAY=":1"
 SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
 REMOTECONFIG="${SCRIPT_DIR}/${VM_NAME}_dynamic.remmina"
@@ -72,7 +75,7 @@ if grep -q "$SSH_HOST_ENTRY" "$SSH_CONFIG_FILE" 2>/dev/null; then
         { print }
     ' "$SSH_CONFIG_FILE" > "${SSH_CONFIG_FILE}.tmp" && mv "${SSH_CONFIG_FILE}.tmp" "$SSH_CONFIG_FILE"
 else
-    echo -e "\nHost $VM_NAME\n    HostName $VM_IP\n    User leon_greiner12345\n    IdentityFile ~/.ssh/${VM_NAME}_key\n    StrictHostKeyChecking no" >> "$SSH_CONFIG_FILE"
+    echo -e "\nHost $VM_NAME\n    HostName $VM_IP\n    User $CURRENT_USER\n    IdentityFile ~/.ssh/${VM_NAME}_key\n    StrictHostKeyChecking no" >> "$SSH_CONFIG_FILE"
 fi
 
 if [ "$NO_VNC" = true ]; then
@@ -84,13 +87,13 @@ echo "🖥️ Setting up VNC server ($VNC_RESOLUTION)..."
 
 # Kill existing VNC sessions silently
 ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
-    leon_greiner12345@$VM_IP "vncserver -kill $VNC_DISPLAY" >/dev/null 2>&1
+    $CURRENT_USER@$VM_IP "vncserver -kill $VNC_DISPLAY" >/dev/null 2>&1
 
 sleep 5
 
 # Start VNC server and capture only essential output
 VNC_OUTPUT=$(ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
-    leon_greiner12345@$VM_IP "vncserver $VNC_DISPLAY -geometry $VNC_RESOLUTION -depth 24 -localhost no" 2>&1)
+    $CURRENT_USER@$VM_IP "vncserver $VNC_DISPLAY -geometry $VNC_RESOLUTION -depth 24 -localhost no" 2>&1)
 
 if echo "$VNC_OUTPUT" | grep -q "desktop"; then
     echo "✅ VNC server started successfully"
