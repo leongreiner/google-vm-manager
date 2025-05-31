@@ -94,8 +94,16 @@ class GoogleVMWorker(QThread):
         except Exception as e:
             self.output.emit(f"Warning: Could not check/fix script permissions: {e}")
 
-        cmd = f"{SCRIPT_PATH} {self.action} {self.vm_config['name']} {self.vm_config['zone']} {self.vm_config['project_id']} {self.resolution}"
-        if self.no_vnc and self.action == "start":
+        # Get SSH key path and username from config
+        ssh_key_path = self.vm_config.get('ssh_key_path', '')
+        ssh_username = self.vm_config.get('ssh_username', '')
+        
+        cmd = f"{SCRIPT_PATH} {self.action} {self.vm_config['name']} {self.vm_config['zone']} {self.vm_config['project_id']} {self.resolution} {ssh_key_path}"
+        # Add username parameter if available
+        if ssh_username:
+            cmd += f" {ssh_username}"
+            
+        if self.no_vnc:
             cmd += " --no-vnc"
         
         process = subprocess.Popen(
@@ -260,25 +268,91 @@ class VMConfigDialog(QDialog):
         
         self.project_edit = QLineEdit(self.vm_config.get('project_id', ''))
         
+        # Add SSH key selection
+        ssh_key_layout = QHBoxLayout()
+        self.ssh_key_edit = QLineEdit(self.vm_config.get('ssh_key_path', ''))
+        self.ssh_key_edit.setPlaceholderText("Path to SSH private key")
+        self.ssh_key_browse = QPushButton("Browse...")
+        self.ssh_key_browse.clicked.connect(self.browse_ssh_key)
+        ssh_key_layout.addWidget(self.ssh_key_edit)
+        ssh_key_layout.addWidget(self.ssh_key_browse)
+        
         layout.addRow("VM Name:", self.name_edit)
         layout.addRow("Zone:", self.zone_combo)
         layout.addRow("Project ID:", self.project_edit)
+        layout.addRow("SSH Key:", ssh_key_layout)
         
         buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
 
+    def browse_ssh_key(self):
+        from PyQt5.QtWidgets import QFileDialog
+        
+        home_dir = os.path.expanduser("~")
+        ssh_dir = os.path.join(home_dir, ".ssh")
+        
+        fileName, _ = QFileDialog.getOpenFileName(
+            self, "Select SSH Key", ssh_dir, 
+            "SSH Keys (id_rsa id_*);; All Files (*)"
+        )
+        
+        if fileName:
+            self.ssh_key_edit.setText(fileName)
+            # Try to extract username from public key
+            username = self.extract_username_from_key(fileName)
+            if username:
+                # Display the extracted username
+                QMessageBox.information(
+                    self, 
+                    "Username Detected", 
+                    f"Username '{username}' will be used for SSH connection."
+                )
+
+    def extract_username_from_key(self, private_key_path):
+        """Extract username from SSH key's corresponding public key"""
+        try:
+            # Try to find the public key file
+            public_key_path = private_key_path + ".pub"
+            if not os.path.exists(public_key_path):
+                return None
+                
+            # Read the public key file
+            with open(public_key_path, 'r') as f:
+                pubkey_content = f.read().strip()
+            
+            # The public key format is typically: <type> <key> <comment>
+            # The comment often contains an email address
+            parts = pubkey_content.split()
+            if len(parts) >= 3:
+                comment = parts[2]
+                # Extract username from email (part before @)
+                if '@' in comment:
+                    return comment.split('@')[0]
+            return None
+        except Exception as e:
+            print(f"Error extracting username from key: {e}")
+            return None
+
     def get_config(self):
-        return {
+        config = {
             'name': self.name_edit.text(),
             'zone': self.zone_combo.currentText(),
-            'project_id': self.project_edit.text()
+            'project_id': self.project_edit.text(),
+            'ssh_key_path': self.ssh_key_edit.text(),
         }
+        
+        # Try to extract username from key
+        username = self.extract_username_from_key(self.ssh_key_edit.text())
+        if username:
+            config['ssh_username'] = username
+            
+        return config
 
     def accept(self):
         if not all([self.name_edit.text(), self.zone_combo.currentText(), self.project_edit.text()]):
-            QMessageBox.warning(self, "Error", "All fields are required!")
+            QMessageBox.warning(self, "Error", "VM name, zone, and project ID are required!")
             return
         super().accept()
 
@@ -315,6 +389,8 @@ class GoogleVMControlApp(QWidget):
         main_layout = QVBoxLayout(self)
         main_layout.setContentsMargins(20, 20, 20, 20)
         main_layout.setSpacing(15)
+
+        # Remove the unexpected message box here
 
         title = QLabel("📟 Google VM Control Panel")
         title.setFont(QFont("Arial", 20, QFont.Bold))
@@ -471,10 +547,10 @@ class GoogleVMControlApp(QWidget):
         for btn in (self.start_vnc_btn, self.start_no_vnc_btn, self.stop_btn):
             btn.setDisabled(False)
 
+            # Refresh status after successful operation
         if exit_code == 0:
             QMessageBox.information(self, "Done", "Operation completed successfully.")
             self.status_label.setText("Ready.")
-            # Refresh status after successful operation
             QTimer.singleShot(2000, self.refresh_vm_status)  # Wait 2 seconds before refreshing
         else:
             QMessageBox.critical(

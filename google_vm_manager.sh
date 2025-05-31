@@ -6,15 +6,21 @@ VM_NAME="$2"
 ZONE="$3"
 PROJECT_ID="$4"
 VNC_RESOLUTION="$5"
+SSH_KEY_PATH="$6"
+SSH_USERNAME="$7"
 NO_VNC=false
 
-if [[ "$6" == "--no-vnc" || "$6" == "no_vnc" ]]; then
+# Check if the 7th argument is --no-vnc or if the 8th argument is --no-vnc
+if [[ "$7" == "--no-vnc" || "$7" == "no_vnc" ]]; then
+  NO_VNC=true
+  SSH_USERNAME=""
+elif [[ "$8" == "--no-vnc" || "$8" == "no_vnc" ]]; then
   NO_VNC=true
 fi
 
 # Check valid action and parameters
 if [[ "$MODE" != "start" && "$MODE" != "stop" ]] || [[ -z "$VM_NAME" ]] || [[ -z "$ZONE" ]] || [[ -z "$PROJECT_ID" ]]; then
-  echo "Usage: $0 start|stop VM_NAME ZONE PROJECT_ID RESOLUTION [--no-vnc]"
+  echo "Usage: $0 start|stop VM_NAME ZONE PROJECT_ID RESOLUTION [SSH_KEY_PATH] [SSH_USERNAME] [--no-vnc]"
   exit 1
 fi
 
@@ -23,7 +29,17 @@ if [[ -z "$VNC_RESOLUTION" ]]; then
   VNC_RESOLUTION="1920x1080"
 fi
 
-# Get current user
+# Use default SSH key if not provided
+if [[ -z "$SSH_KEY_PATH" ]]; then
+  SSH_KEY_PATH="~/.ssh/${VM_NAME}_key"
+fi
+
+# Get current user for SSH if not specified
+if [[ -z "$SSH_USERNAME" ]]; then
+  SSH_USERNAME=$(whoami)
+fi
+
+# Get current user for local operations
 CURRENT_USER=$(whoami)
 
 VNC_DISPLAY=":1"
@@ -31,6 +47,7 @@ SCRIPT_DIR="$(dirname "$(readlink -f "$0")")"
 REMOTECONFIG="${SCRIPT_DIR}/${VM_NAME}_dynamic.remmina"
 
 echo "▶ $MODE VM: $VM_NAME in zone $ZONE (project: $PROJECT_ID)"
+echo "▶ Using SSH username: $SSH_USERNAME"
 
 # Start/stop VM with filtered output
 if [[ "$MODE" == "start" ]]; then
@@ -68,14 +85,16 @@ SSH_CONFIG_FILE=~/.ssh/config
 SSH_HOST_ENTRY="Host $VM_NAME"
 
 if grep -q "$SSH_HOST_ENTRY" "$SSH_CONFIG_FILE" 2>/dev/null; then
-    awk -v vm="$VM_NAME" -v ip="$VM_IP" '
+    awk -v vm="$VM_NAME" -v ip="$VM_IP" -v key="$SSH_KEY_PATH" -v username="$SSH_USERNAME" '
         $1 == "Host" && $2 == vm { print; in_block=1; next }
         in_block && $1 == "HostName" { print "    HostName " ip; next }
+        in_block && $1 == "User" { print "    User " username; next }
+        in_block && $1 == "IdentityFile" { print "    IdentityFile " key; next }
         in_block && $1 == "Host" && $2 != vm { in_block=0 }
         { print }
     ' "$SSH_CONFIG_FILE" > "${SSH_CONFIG_FILE}.tmp" && mv "${SSH_CONFIG_FILE}.tmp" "$SSH_CONFIG_FILE"
 else
-    echo -e "\nHost $VM_NAME\n    HostName $VM_IP\n    User $CURRENT_USER\n    IdentityFile ~/.ssh/${VM_NAME}_key\n    StrictHostKeyChecking no" >> "$SSH_CONFIG_FILE"
+    echo -e "\nHost $VM_NAME\n    HostName $VM_IP\n    User $SSH_USERNAME\n    IdentityFile $SSH_KEY_PATH\n    StrictHostKeyChecking no" >> "$SSH_CONFIG_FILE"
 fi
 
 if [ "$NO_VNC" = true ]; then
@@ -87,13 +106,13 @@ echo "🖥️ Setting up VNC server ($VNC_RESOLUTION)..."
 
 # Kill existing VNC sessions silently
 ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
-    $CURRENT_USER@$VM_IP "vncserver -kill $VNC_DISPLAY" >/dev/null 2>&1
+    $SSH_USERNAME@$VM_IP "vncserver -kill $VNC_DISPLAY" >/dev/null 2>&1
 
 sleep 5
 
 # Start VNC server and capture only essential output
 VNC_OUTPUT=$(ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
-    $CURRENT_USER@$VM_IP "vncserver $VNC_DISPLAY -geometry $VNC_RESOLUTION -depth 24 -localhost no" 2>&1)
+    $SSH_USERNAME@$VM_IP "vncserver $VNC_DISPLAY -geometry $VNC_RESOLUTION -depth 24 -localhost no" 2>&1)
 
 if echo "$VNC_OUTPUT" | grep -q "desktop"; then
     echo "✅ VNC server started successfully"
@@ -104,7 +123,7 @@ else
 fi
 
 echo "⏳ Waiting for VNC to be ready..."
-sleep 5
+sleep 8
 
 # Test connection silently
 if nc -z -w5 $VM_IP 5901 >/dev/null 2>&1; then
