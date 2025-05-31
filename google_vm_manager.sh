@@ -34,6 +34,9 @@ if [[ -z "$SSH_KEY_PATH" ]]; then
   SSH_KEY_PATH="~/.ssh/${VM_NAME}_key"
 fi
 
+# Expand tilde in SSH key path
+SSH_KEY_PATH="${SSH_KEY_PATH/#\~/$HOME}"
+
 # Get current user for SSH if not specified
 if [[ -z "$SSH_USERNAME" ]]; then
   SSH_USERNAME=$(whoami)
@@ -105,31 +108,57 @@ fi
 echo "🖥️ Setting up VNC server ($VNC_RESOLUTION)..."
 
 # Kill existing VNC sessions silently
-ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+ssh -i "$SSH_KEY_PATH" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
     $SSH_USERNAME@$VM_IP "vncserver -kill $VNC_DISPLAY" >/dev/null 2>&1
 
 sleep 5
 
 # Start VNC server and capture only essential output
-VNC_OUTPUT=$(ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+VNC_OUTPUT=$(ssh -i "$SSH_KEY_PATH" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
     $SSH_USERNAME@$VM_IP "vncserver $VNC_DISPLAY -geometry $VNC_RESOLUTION -depth 24 -localhost no" 2>&1)
 
 if echo "$VNC_OUTPUT" | grep -q "desktop"; then
     echo "✅ VNC server started successfully"
+    # Extract the actual display number from output
+    ACTUAL_DISPLAY=$(echo "$VNC_OUTPUT" | grep -o ":[0-9]\+" | head -1)
+    if [[ -n "$ACTUAL_DISPLAY" ]]; then
+        VNC_DISPLAY="$ACTUAL_DISPLAY"
+        echo "▶ VNC running on display $VNC_DISPLAY"
+    fi
 else
     echo "❌ VNC server failed to start"
-    echo "$VNC_OUTPUT" | grep -E "(ERROR|FAILED|refused)"
+    echo "$VNC_OUTPUT" | grep -E "(ERROR|FAILED|refused|Permission denied)"
     exit 1
 fi
 
 echo "⏳ Waiting for VNC to be ready..."
 sleep 8
 
-# Test connection silently
-if nc -z -w5 $VM_IP 5901 >/dev/null 2>&1; then
-    echo "✅ VNC connection ready"
+# Calculate VNC port (display :1 = port 5901, :2 = port 5902, etc.)
+DISPLAY_NUM=${VNC_DISPLAY#:}
+VNC_PORT=$((5900 + DISPLAY_NUM))
+
+echo "▶ Testing VNC connection on port $VNC_PORT..."
+
+# Test connection silently with multiple attempts
+VNC_READY=false
+for i in {1..3}; do
+    if nc -z -w5 $VM_IP $VNC_PORT >/dev/null 2>&1; then
+        VNC_READY=true
+        break
+    fi
+    echo "▶ Attempt $i failed, retrying..."
+    sleep 3
+done
+
+if [ "$VNC_READY" = true ]; then
+    echo "✅ VNC connection ready on port $VNC_PORT"
 else
-    echo "❌ VNC server not responding"
+    echo "❌ VNC server not responding on port $VNC_PORT"
+    # Try to get more info about what's running
+    echo "▶ Checking VNC processes on remote server..."
+    ssh -i "$SSH_KEY_PATH" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+        $SSH_USERNAME@$VM_IP "ps aux | grep vnc | grep -v grep" 2>/dev/null || echo "No VNC processes found"
     exit 1
 fi
 
@@ -138,7 +167,7 @@ mkdir -p "$(dirname "$REMOTECONFIG")"
 cat > "$REMOTECONFIG" <<EOL
 [remmina]
 protocol=VNC
-server=$VM_IP:5901
+server=$VM_IP:$VNC_PORT
 name=${VM_NAME}_dynamic
 group=
 password=
@@ -154,4 +183,4 @@ G_MESSAGES_DEBUG="" remmina -c "$REMOTECONFIG" >/dev/null 2>&1 &
 
 sleep 2
 echo "✅ Setup complete! VNC client should be starting..."
-echo "💡 Manual connection: $VM_IP:5901"
+echo "💡 Manual connection: $VM_IP:$VNC_PORT"

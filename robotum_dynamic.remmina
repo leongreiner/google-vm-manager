@@ -1,0 +1,12 @@
+[remmina]
+protocol=VNC
+server=34.118.115.122:5901
+name=robotum_dynamic
+group=
+password=
+quality=2
+colordepth=32
+disableencryption=1
+window_maximize=0
+window_height=480
+window_width=640
